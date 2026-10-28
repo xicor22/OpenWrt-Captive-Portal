@@ -16,8 +16,8 @@ flowchart TD
 
     subgraph OpenWrt ["OpenWrt Router"]
         FW["Firewall4 (nftables)"]
-        LAN["Main LAN Bridge (<ROUTER_LAN_IP>/24)"]
-        GUEST["Guest Bridge: br-guest (<GUEST_IP>/24)"]
+        LAN["Main LAN Bridge: br-lan"]
+        GUEST["Guest Bridge: br-guest"]
         PORTAL["uhttpd Portal (Port 8080)"]
         GUARD["guest_guard.sh (Cron: Every 1m)"]
         AUTH_SET["nftables set: guest_authorized"]
@@ -29,15 +29,15 @@ flowchart TD
         STA_GUEST["Guest Devices / Phones"]
     end
 
-    ONT <-->|DHCP / Static| FW
+    ONT <-->|"DHCP / Static"| FW
     FW <--> LAN <--> STA_LAN
     FW <--> GUEST <--> STA_GUEST
 
-    STA_GUEST -->|Port 80 HTTP Redirect| PORTAL
-    PORTAL -->|Valid TOTP (24h Lease)| AUTH_SET
-    AUTH_SET -->|Unlocks WAN Access| FW
-    GUARD -->|Unauthenticated >= 10m| BAN_SET
-    BAN_SET -->|Drop Packets & Deauth| GUEST
+    STA_GUEST -->|"Port 80 HTTP Redirect"| PORTAL
+    PORTAL -->|"Valid TOTP - 24h Lease"| AUTH_SET
+    AUTH_SET -->|"Unlocks WAN Access"| FW
+    GUARD -->|"Unauthenticated over 10m"| BAN_SET
+    BAN_SET -->|"Drop Packets and Deauth"| GUEST
 ```
 
 ---
