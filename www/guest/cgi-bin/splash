@@ -1,0 +1,10 @@
+#!/bin/sh
+# Captive Portal Splash HTTP 302 Redirect
+# Redirects any HTTP request to the captive portal login page
+
+TARGET_HOST="${SERVER_ADDR:-192.168.10.1}"
+TARGET_PORT="${SERVER_PORT:-8080}"
+
+echo "Status: 302 Found"
+echo "Location: http://${TARGET_HOST}:${TARGET_PORT}/index.html"
+echo ""

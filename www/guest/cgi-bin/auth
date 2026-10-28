@@ -1,0 +1,98 @@
+#!/bin/sh
+# Captive Portal TOTP Verification CGI Script
+# Compatible with OpenWrt BusyBox ash, awk, and OpenSSL
+
+HEX_KEY=$(cat /etc/guest_totp.hex 2>/dev/null)
+read -n "${CONTENT_LENGTH:-0}" POST_DATA
+USER_CODE=$(echo "$POST_DATA" | sed -n 's/.*code=\([0-9]\{6\}\).*/\1/p')
+CLIENT_IP="$REMOTE_ADDR"
+
+NOW_STEP=$(( $(date +%s) / 30 ))
+MATCH=0
+
+# Verify code across a +/- 1 step time drift window (30-second skew tolerance)
+if [ -n "$USER_CODE" ] && [ -n "$HEX_KEY" ]; then
+    for OFFSET in -1 0 1; do
+        STEP=$(( NOW_STEP + OFFSET ))
+        # Generate 8-byte big-endian binary counter for OpenSSL HMAC-SHA1
+        HASH=$(printf $(printf "%016x" "$STEP" | sed 's/../\\x&/g') | openssl dgst -sha1 -mac HMAC -macopt "hexkey:$HEX_KEY" | awk '{print $NF}')
+        # RFC 4226 Dynamic Truncation
+        OFF_HEX=$(echo "$HASH" | cut -c 40)
+        START=$(( 0x$OFF_HEX * 2 + 1 ))
+        PART=$(echo "$HASH" | cut -c ${START}-$(( START + 7 )))
+        VAL=$(( (0x$PART & 0x7fffffff) % 1000000 ))
+        CALC=$(printf "%06d" "$VAL")
+        if [ "$USER_CODE" = "$CALC" ]; then
+            MATCH=1
+            break
+        fi
+    done
+fi
+
+echo "Content-Type: text/html"
+echo ""
+
+if [ "$MATCH" -eq 1 ]; then
+    # Add client IP to nftables authorized set with a 24-hour (86400s) lease
+    nft add element inet fw4 guest_authorized "{ $CLIENT_IP timeout 86400s }" 2>/dev/null
+    
+    # Remove client MAC from tracking file if tracked by the guard script
+    CLIENT_MAC=$(ip neigh show "$CLIENT_IP" dev br-guest | awk '{print tolower($5)}')
+    [ -n "$CLIENT_MAC" ] && sed -i "/^$CLIENT_MAC /d" /tmp/guest_timer.txt 2>/dev/null
+
+    cat << 'HTML'
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authorized</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0f172a; color: #f8fafc; padding: 16px; text-align: center; }
+    .card { background: #1e293b; padding: 36px 28px; border-radius: 16px; max-width: 340px; border: 1px solid #334155; }
+    .success-icon { width: 56px; height: 56px; margin: 0 auto 16px; background: #16a34a; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+    .success-icon svg { width: 32px; height: 32px; fill: white; }
+    h2 { margin-bottom: 8px; color: #4ade80; }
+    p { font-size: 14px; color: #94a3b8; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="success-icon">
+      <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+    </div>
+    <h2>Connected!</h2>
+    <p>Your device has been authorized. You have unrestricted high-speed internet access for 24 hours.</p>
+  </div>
+</body>
+</html>
+HTML
+else
+    cat << 'HTML'
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Invalid Code</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #0f172a; color: #f8fafc; padding: 16px; text-align: center; }
+    .card { background: #1e293b; padding: 36px 28px; border-radius: 16px; max-width: 340px; border: 1px solid #ef4444; }
+    .error-icon { width: 56px; height: 56px; margin: 0 auto 16px; background: #dc2626; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+    .error-icon svg { width: 32px; height: 32px; fill: white; }
+    h2 { margin-bottom: 8px; color: #f87171; }
+    p { font-size: 14px; color: #94a3b8; margin-bottom: 20px; line-height: 1.5; }
+    a { display: inline-block; padding: 10px 20px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="error-icon">
+      <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    </div>
+    <h2>Invalid Code</h2>
+    <p>The 6-digit Authenticator code entered was incorrect or expired. Please check your authenticator app and try again.</p>
+    <a href="/index.html">Try Again</a>
+  </div>
+</body>
+</html>
+HTML
+fi

@@ -1,0 +1,51 @@
+# ==============================================================================
+# OpenWrt Captive Portal - nftables Ruleset (Firewall4)
+# Place in: /etc/nftables.d/20-guest-portal.nft
+#
+# NOTE: This file is included automatically INSIDE the `table inet fw4 { ... }`
+# block. Do NOT declare `table inet fw4` or use `add ...` prefixes here.
+# ==============================================================================
+
+set guest_authorized {
+	type ipv4_addr
+	flags timeout
+}
+
+set guest_banned {
+	type ether_addr
+}
+
+# 1. Router Input Protection
+chain guest_input {
+	type filter hook input priority filter - 10; policy accept;
+	# Drop banned hardware MAC addresses immediately
+	iifname "br-guest" ether saddr @guest_banned drop
+	# Prevent guests from probing or accessing the router on private subnets
+	iifname "br-guest" ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } drop
+}
+
+# 2. Captive Portal HTTP Interception
+chain guest_prerouting {
+	type nat hook prerouting priority dstnat - 10; policy accept;
+	# Drop banned MACs in NAT
+	iifname "br-guest" ether saddr @guest_banned drop
+	# Authorized guests bypass portal redirect
+	iifname "br-guest" ip saddr @guest_authorized accept
+	# Intercept unauthenticated HTTP port 80 traffic and redirect to captive portal port (default: 8080)
+	iifname "br-guest" tcp dport 80 redirect to :8080
+}
+
+# 3. Forwarding & Subnet Isolation
+chain guest_forward {
+	type filter hook forward priority filter - 10; policy accept;
+	# Drop banned MACs
+	iifname "br-guest" ether saddr @guest_banned drop
+	# Drop IPv6 on guest forward to prevent unauthenticated IPv6 leakage
+	iifname "br-guest" meta nfproto ipv6 drop
+	# Strictly isolate private subnets (RFC1918 and Carrier-Grade NAT / Tailscale ranges)
+	iifname "br-guest" ip daddr { 10.0.0.0/8, 100.64.0.0/10, 172.16.0.0/12, 192.168.0.0/16 } drop
+	# Allow authenticated guests in the set access to the WAN/Internet
+	iifname "br-guest" ip saddr @guest_authorized accept
+	# Block all unauthenticated guest forward traffic
+	iifname "br-guest" drop
+}
